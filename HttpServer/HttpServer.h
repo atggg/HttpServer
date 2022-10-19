@@ -210,26 +210,29 @@ private:
 class HttpConnection
 {
 public:
-	HttpConnection(SockHandle fd, EventLoop* evLoop, std::function<bool(HttpRequest*, HttpResponse*, std::string&)> processCall);
+	HttpConnection(SockHandle fd, EventLoop* evLoop, std::function<bool(HttpConnection*, std::string&)> requestCall, std::function<void(HttpConnection*)> closeCall);
 	~HttpConnection();
-	void writeProcess(void* arg);
-	void readProcess(void* arg);
-	void closeProcess(void* arg);
+	HttpRequest* Request();
+	HttpResponse* Response();
+	void SetWriteCall(std::function<bool(HttpConnection*, std::string&)> writeCall);
 private:
+	void writeProcess(void* arg); //TCP写事件
+	void readProcess(void* arg); //TCP读事件
+	void closeProcess(void* arg); //TCP关闭事件
 	EventLoop* _evLoop;
 	Buffer* _rbuff;
 	Buffer* _wbuff;
 	Channel* _channel;
 	HttpRequest* _HttpRequest;
 	HttpResponse* _HttpResponse;
-	std::function<bool(HttpRequest*, HttpResponse*, std::string&)> _processCall;
+	std::function<bool(HttpConnection*, std::string&)> _requestCall; //请求回调
+	std::function<bool(HttpConnection*, std::string&)> _writeCall;//写回调
+	std::function<void(HttpConnection*)> _closeCall; //关闭回调
 
 };
 
 class HttpServer
 {
-	
-	
 public:
 	enum state
 	{
@@ -237,10 +240,14 @@ public:
 		s_error,
 		s_close
 	};
-	HttpServer(int port, std::function<bool(HttpRequest*, HttpResponse*, std::string&)> processCall,int thNum);
+	HttpServer(int port, int thNum);
+	virtual ~HttpServer();
 	bool run();
 	state getState();
-	~HttpServer();
+	//继承重写他
+	virtual bool processHttpRequest(HttpConnection* conn, std::string& reData);
+	virtual void processHttpClose(HttpConnection* conn);
+	static const char* getFiletype(const char* fileName);
 private:
 	void acceptConnect(void* arg);
 	void WinSockClose();
@@ -252,7 +259,6 @@ private:
 	state _state;
 	EventLoop* _mainLoop;
 	ReactorPool* _reactorPool;
-	std::function<bool(HttpRequest*, HttpResponse*,std::string&)> _processCall;
 };
 
 

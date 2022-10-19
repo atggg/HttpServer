@@ -480,8 +480,8 @@ void ReactorPool::WorkIng(int id)
     evloop->run();
 }
 
-HttpServer::HttpServer(int port, std::function<bool(HttpRequest*, HttpResponse*, std::string&)> processCall, int thNum)
-    :_thNum(thNum),_port(port),_processCall(processCall), _state(s_close), _mainLoop(nullptr), _reactorPool(nullptr)
+HttpServer::HttpServer(int port, int thNum)
+    :_thNum(thNum),_port(port),_state(s_close), _mainLoop(nullptr), _reactorPool(nullptr)
 {
     if (!listenInit(_port))
     {
@@ -506,6 +506,65 @@ HttpServer::state HttpServer::getState()
     return _state;
 }
 
+bool HttpServer::processHttpRequest(HttpConnection* conn, std::string& reData)
+{
+    reData = "heoll At HttpServer";
+    conn->Response()->setState(200);
+    conn->Response()->setVersion("HTTP/1.1");
+    conn->Response()->addHeader(std::make_pair(std::string("Content-Length"), std::to_string(reData.size())));
+    return true;
+}
+
+void HttpServer::processHttpClose(HttpConnection* conn)
+{
+    std::cout << "conn:" << conn << "被关闭了" << std::endl;
+}
+
+const char* HttpServer::getFiletype(const char* fileName)
+{
+    char* dot;
+
+    // 自右向左查找‘.’字符, 如不存在返回NULL
+    dot = (char*)strrchr(fileName, '.');
+    if (dot == NULL)
+        return "text/plain; charset=utf-8";
+    if (strcmp(dot, ".html") == 0 || strcmp(dot, ".htm") == 0)
+        return "text/html; charset=utf-8";
+    if (strcmp(dot, ".jpg") == 0 || strcmp(dot, ".jpeg") == 0)
+        return "image/jpeg";
+    if (strcmp(dot, ".gif") == 0)
+        return "image/gif";
+    if (strcmp(dot, ".png") == 0)
+        return "image/png";
+    if (strcmp(dot, ".css") == 0)
+        return "text/css";
+    if (strcmp(dot, ".au") == 0)
+        return "audio/basic";
+    if (strcmp(dot, ".wav") == 0)
+        return "audio/wav";
+    if (strcmp(dot, ".avi") == 0)
+        return "video/x-msvideo";
+    if (strcmp(dot, ".mov") == 0 || strcmp(dot, ".qt") == 0)
+        return "video/quicktime";
+    if (strcmp(dot, ".mpeg") == 0 || strcmp(dot, ".mpe") == 0)
+        return "video/mpeg";
+    if (strcmp(dot, ".vrml") == 0 || strcmp(dot, ".wrl") == 0)
+        return "model/vrml";
+    if (strcmp(dot, ".midi") == 0 || strcmp(dot, ".mid") == 0)
+        return "audio/midi";
+    if (strcmp(dot, ".mp3") == 0)
+        return "audio/mpeg";
+    if (strcmp(dot, ".mp4") == 0 || strcmp(dot, ".m4a") == 0)
+        return "audio/mp4";
+    if (strcmp(dot, ".ogg") == 0)
+        return "application/ogg";
+    if (strcmp(dot, ".pac") == 0)
+        return "application/x-ns-proxy-autoconfig";
+
+    return "text/plain; charset=utf-8";
+}
+
+
 void HttpServer::acceptConnect(void* arg)
 {
     if (arg != this)
@@ -527,7 +586,10 @@ void HttpServer::acceptConnect(void* arg)
     if (cfd != -1)
     {
         //std::cout << "收到一个连接" << std::endl;
-        new HttpConnection(cfd, _reactorPool->takeWorkerEventLoop(), _processCall);
+        new HttpConnection(cfd, _reactorPool->takeWorkerEventLoop(), 
+            std::bind(&HttpServer::processHttpRequest, this, std::placeholders::_1, std::placeholders::_2),
+            std::bind(&HttpServer::processHttpClose, this, std::placeholders::_1)
+        );
     }
 }
 
@@ -847,6 +909,11 @@ bool HttpRequest::parse(Buffer& buff)
     {
         _postData = buff.getAllData();
     }
+    else
+    {
+        //这个东西是防止有些请求他不是上传数据也携带数据 把buff全部读干净
+        buff.getAllData();
+    }
     auto Content_Type = _header.find("Content-Type");
     if (_postData != "" && Content_Type != _header.end() && Content_Type->second == "application/x-www-form-urlencoded")
     {
@@ -962,14 +1029,16 @@ std::string HttpResponse::makeHeadString()
     return headerString;
 }
 
-HttpConnection::HttpConnection(SockHandle fd, EventLoop* evLoop, std::function<bool(HttpRequest*, HttpResponse*, std::string&)> processCall)
+HttpConnection::HttpConnection(SockHandle fd, EventLoop* evLoop, std::function<bool(HttpConnection*, std::string&)> requestCall, std::function<void(HttpConnection*)> closeCall)
 {
     _evLoop = evLoop;
     _rbuff = new Buffer(10240);
     _wbuff = new Buffer(10240);
     _HttpRequest = new HttpRequest;
     _HttpResponse = new HttpResponse;
-    _processCall = processCall;
+    _requestCall = requestCall;
+    _writeCall = nullptr;
+    _closeCall = closeCall;
 #ifdef _WIN32
     unsigned long ul = 1;
     ioctlsocket(fd, FIONBIO, &ul);
@@ -1018,6 +1087,21 @@ HttpConnection::~HttpConnection()
     }
 }
 
+HttpRequest* HttpConnection::Request()
+{
+    return _HttpRequest;
+}
+
+HttpResponse* HttpConnection::Response()
+{
+    return _HttpResponse;
+}
+
+void HttpConnection::SetWriteCall(std::function<bool(HttpConnection*, std::string&)> writeCall)
+{
+    _writeCall = writeCall;
+}
+
 void HttpConnection::writeProcess(void* arg)
 {
     if (arg != this)
@@ -1026,11 +1110,30 @@ void HttpConnection::writeProcess(void* arg)
         std::exit(0);
     }
     //std::cout << "写事件触发" << std::endl;
-    _wbuff->socketSend(_channel->fd());
-    if (_wbuff->readSize() == 0)
+    bool isEnd = true;
+    if (_writeCall != nullptr)
     {
-        _channel->writeEvent(false);
-        _evLoop->addTask(*_channel, ChannelElement::MODIFY);
+        std::string reData = "";
+        //先读出数据
+        isEnd = _writeCall(this, reData);
+        //把数据增加到buff
+        _wbuff->append(reData);
+        if (isEnd)
+        {
+            _writeCall = nullptr;
+        }
+    }
+    //发送数据
+    _wbuff->socketSend(_channel->fd());
+    //如果buff的数据已经发完 并且 判断回调数据数据是否发完 如果成立就关闭写事件
+    if (_wbuff->readSize() == 0 && isEnd)
+    {
+        //清空本次请求的数据和响应
+        _HttpRequest->clear();
+        _HttpResponse->clear();
+        //关闭写事件的检测
+         _channel->writeEvent(false);
+         _evLoop->addTask(*_channel, ChannelElement::MODIFY);
     }
 }
 
@@ -1055,12 +1158,13 @@ void HttpConnection::readProcess(void* arg)
         //处理http请求
         std::string data;
         bool rc = false;
-        if (_processCall != nullptr)
+        if (_requestCall != nullptr)
         {
-            rc = _processCall(_HttpRequest, _HttpResponse, data);
+            rc = _requestCall(this, data);
         }
         if (!rc)
         {
+            _HttpResponse->clear();
             _HttpResponse->setState(400);
             _HttpResponse->setVersion("HTTP/1.1");
             _HttpResponse->addHeader(std::make_pair(std::string("Content-Length"), std::string("0")));
@@ -1081,7 +1185,6 @@ void HttpConnection::readProcess(void* arg)
         _HttpResponse->addHeader(std::make_pair(std::string("Content-Length"), std::string("0")));
         _wbuff->append(_HttpResponse->makeHeadString());
     }
-    //开启写事件
     _channel->writeEvent(true);
     _evLoop->addTask(*_channel, ChannelElement::MODIFY);
 }
@@ -1094,6 +1197,7 @@ void HttpConnection::closeProcess(void* arg)
         std::exit(0);
     }
     //std::cout << "关闭事件触发" << std::endl;
+    _closeCall(this);
     delete this;
 }
 
