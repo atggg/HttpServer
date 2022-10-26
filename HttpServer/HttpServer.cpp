@@ -279,7 +279,14 @@ EventLoop::EventLoop(std::string thName)
 	_isQuit = false;
 	_SelectDispatcher = new SelectDispatcher();
 	_thId = std::this_thread::get_id();
+#ifdef _WIN32
     int ret = socketpair(AF_INET, SOCK_STREAM, 0, _sockPair);
+#endif // _WIN32
+#ifdef linux
+    int ret = socketpair(AF_UNIX, SOCK_STREAM, 0, _sockPair);
+#endif // linux
+
+
     if (ret == -1)
     {
         //std::cout << "socketpair Error" << std::endl;
