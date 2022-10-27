@@ -231,17 +231,34 @@ void SelectDispatcher::dispatch(EventLoop& evLoop, int timeOut)
 	fd_set tRead = _readSet;
 	fd_set tWrite = _writeSet;
 	int count = select(MAX, &tRead, &tWrite, nullptr, &tv);
-	for (int i = 0; i < MAX; i++)
-	{
-		if(FD_ISSET(i, &tRead))
-		{
-			evLoop.eventActivate(i, Channel::read);
-		}
-		if (FD_ISSET(i, &tWrite))
-		{
-			evLoop.eventActivate(i, Channel::write);
-		}
-	}
+#ifdef linux
+    for (int i = 0; i < MAX; i++)
+    {
+        if (FD_ISSET(i, &tRead))
+        {
+            evLoop.eventActivate(i, Channel::read);
+        }
+        if (FD_ISSET(i, &tWrite))
+        {
+            evLoop.eventActivate(i, Channel::write);
+        }
+    }
+#endif // linux
+#ifdef _WIN32
+    for (int i = 0; i < count; i++)
+    {
+        if (FD_ISSET(tRead.fd_array[i], &tRead))
+        {
+            evLoop.eventActivate(tRead.fd_array[i], Channel::read);
+        }
+        if (FD_ISSET(tWrite.fd_array[i], &tWrite))
+        {
+            evLoop.eventActivate(tWrite.fd_array[i], Channel::write);
+        }
+    }
+#endif // _WIN32
+
+
 }
 
 SelectDispatcher::~SelectDispatcher()
@@ -304,7 +321,7 @@ bool EventLoop::run()
     }
     while (!_isQuit)
     {
-        _SelectDispatcher->dispatch(*this, 200);
+        _SelectDispatcher->dispatch(*this, 20);
         processTask();
     }
     return true;
@@ -441,6 +458,11 @@ ReactorPool::ReactorPool(EventLoop* mainLoop, int thNum)
 ReactorPool::~ReactorPool()
 {
     close();
+    for (auto it : _tharr)
+    {
+        delete it;
+    }
+    _tharr.clear();
     _isStart = false;
 }
 
@@ -448,7 +470,8 @@ void ReactorPool::run()
 {
     for (int i = 0; i < _thNum; i++)
     {
-        new std::thread(&ReactorPool::WorkIng, this,i);
+        _tharr.push_back(new std::thread(&ReactorPool::WorkIng, this, i));
+        
     }
     _isStart = true;
 }

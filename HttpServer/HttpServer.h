@@ -143,6 +143,7 @@ private:
 	int _thNum;
 	std::vector<EventLoop*> _workEvLoopList;
 	int _index;
+	std::vector<std::thread*> _tharr;
 	std::mutex _mtx;
 };
 class Buffer
