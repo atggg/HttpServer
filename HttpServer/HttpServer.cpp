@@ -306,7 +306,7 @@ EventLoop::EventLoop(std::string thName)
 
     if (ret == -1)
     {
-        //std::cout << "socketpair Error" << std::endl;
+        LOG("socketpair Error");
         std::exit(0);
     }
     Channel channel(_sockPair[1], Channel::read, std::bind(&EventLoop::readLocalMessage, this, std::placeholders::_1), nullptr, nullptr, this);

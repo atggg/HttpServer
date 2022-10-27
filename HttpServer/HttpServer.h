@@ -30,6 +30,26 @@ typedef int SockHandle;
 #include<string>
 #include<iostream>
 
+//log
+#define debug
+
+#ifdef _WIN32
+#ifdef debug
+
+#define LOG(arg) \
+OutputDebugStringA(arg)
+#endif // debug
+#endif // _WIN32
+
+#ifdef linux
+#ifdef debug
+
+#define LOG(arg) \
+printf(arg)
+#endif // debug
+#endif // linux
+
+
 
 
 
